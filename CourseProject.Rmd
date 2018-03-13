@@ -1,0 +1,223 @@
+---
+title: "Analysis of the effect of the transmission on the MPG"
+author: "Erika R. Frits"
+date: '2018-03-11 '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, comment="", message=FALSE)
+knitr::opts_chunk$set(include=TRUE)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(GGally)
+par(mfrow=c(2,2))
+```
+
+## Description
+The aim of the analysis is to answer the following questions:  
+- Is an automatic or manual transmission better for MPG  
+- Quantify the MPG difference between automatic and manual transmissions  
+The analysis based on R's *mtcars* dataset. More information can be found  [here](https://stat.ethz.ch/R-manual/R-devel/library/datasets/html/mtcars.html).  
+Note: V/S is the engine type (0 = V-engine, 1 = stright engine)
+
+## Exploring the data
+```{r include=FALSE}
+str(mtcars)
+sapply(mtcars, anyNA)
+id <- 1:nrow(mtcars)
+```
+After checking the dataset I found that  
+- all variables are coded as numeric values  
+- there are no missing values in the dataset  
+
+Correlations between the variables:  
+
+```{r}
+ggcorr(mtcars, nbreaks=5, label=TRUE)
+```
+
+Transmission has moderate correlation with mpg. 
+The variables with the highest correlation to mpg are the number of cylinders, the weight, the displacements and horse power. These  variables are also highly correlated with each other. the horse power has the lowest correlation with transmission.
+The other variables has moderate correlation with mpg, but the number of forward greas are highly correlated to transmission and the number of carburators and the 1/4 mile time to horse power.
+
+Detailed plots are in the [Appendix 1](#Apx1).
+
+I converted the follwing variables to factors:  
+- vs (engine): {0 = 'V', 1 = 'S'}  
+- am (transmission): {0 = 'A', 1 = 'M'} 
+
+I could also convert 'cyl', 'gear', 'carb' to factors, but I left them as numbers
+for the simplicity of the model.
+
+```{r include=FALSE}
+carData <- mtcars %>% 
+    mutate(engine = as.factor(if_else(vs == 0,'V','S'))) %>%
+    mutate(transmission = as.factor(if_else(am == 0,'A','M'))) %>%
+    select(-c(vs, am))
+```
+
+
+## Model selection
+
+### The simpliest model: mpg vs. transmission
+
+I start with the simpliest model, which contains only the *transmission* variable: 
+$mpg_i = b_0 + b_1 * transmission_i + e_i$
+
+```{r}
+m0 <- lm(mpg ~ transmission , carData)
+m0.coeff <- summary(m0)$coef
+m0.coeff
+```
+
+$R^2$ = `r summary(m0)$r.squared` 
+
+Checking the residuals:  
+
+```{r}
+par(mfrow=c(2,2))
+plot(m0)
+```
+```{r fig.height=3}
+ggplot(carData, aes(x=transmission, y=resid(m0))) + 
+    geom_point() + 
+    ylab("standardized residuals") +
+    ggtitle("Standardized residuals")
+```
+
+
+The residuals are evenly spread around 0 which means no systematic error in the model, and 
+according to the Q-Q plot they are normally distributed. The variance of the data is higher in the 
+'M' transmission group. There are also some possible outlier points which standard resiuals are very close or a little bit over the  
+boundaries of 95% confidence interval (approx. $\pm$ `r round(qnorm(0.972),2)`).
+
+The outlier points and their effects:
+```{r}
+m0.outl <- data.frame(id, standard.residual = rstandard(m0), effect = dfbetas(m0), change.fitted = dffits(m0))
+m0.outl.v <- m0.outl$id[abs(m0.outl$standard.residual) > qnorm(0.972)]
+m0.outl[m0.outl.v,]
+```
+Because of their low leverage and closeness to the other values, they have almost no effect on the coefficients.
+
+The low $R^2$ value indicates that some other factors has to be taken into account.
+
+### Introducing other variables into the model
+Note: becuase the outlier points can vary from model to model, I always use the original data set.
+I will include horse power (*hp*) into the model because according to the correlation matrix the other variables correlate with it or trasnmission.
+
+#### Adding the horse power
+$mpg_i = b_0 + b_1 * transmission_i + b_2 * hp + e_i$
+
+```{r}
+m1 <- lm(mpg ~ transmission + hp , carData)
+m1.coeff <- summary(m1)$coef
+m1.coeff
+```
+  
+$R^2$ = `r summary(m1)$r.squared` 
+
+The $R^2$ value became higher, than the model without *hp* and the t-test also find it significant.
+
+Checking the residuals:  
+
+```{r}
+par(mfrow=c(2,2))
+plot(m1)
+```
+
+```{r fig.height=3}
+ggplot(carData, aes(x=hp, y=rstandard(m1))) + 
+    geom_point() + 
+    ylab("standardized residuals") + 
+    facet_grid(. ~ transmission) +
+    ggtitle("Standardized residuals by transmission")
+```
+
+The residuals does not indicate any pattern, but there are some possible outliers and one point with very high leverage. The Q-Q plot also shows some points at the lower end which do not fit on the line.
+
+
+The outlier points and their effects:
+```{r}
+m1.outl <- data.frame(id, standard.residual = rstandard(m1), effect = dfbetas(m1), change.fitted = dffits(m1), leverage = hatvalues(m1))
+m1.mean.lev = mean(m1.outl$leverage)
+m1.sd.lev = sd(m1.outl$leverage)
+m1.outl.v <- m1.outl$id[abs(m1.outl$standard.residual) > qnorm(0.972) | (m1.outl$leverage - m1.mean.lev) / m1.sd.lev > qnorm(0.972)]
+m1.outl[m1.outl.v,]
+```
+
+The coefficients leaving out the outlier points:
+```{r}
+carData.m1 <- filter(carData, !(row_number() %in% m1.outl.v))
+m1.v1 <- lm(mpg ~ transmission + hp , carData.m1)
+m1.v1.coeff <- summary(m1.v1)$coef
+m1.v1.coeff
+
+```
+$R^2$ = `r summary(m1.v1)$r.squared` 
+
+Checking the residuals:  
+
+```{r}
+par(mfrow=c(2,2))
+plot(m1.v1)
+```
+
+```{r fig.height=3}
+ggplot(carData.m1, aes(x=hp, y=rstandard(m1.v1))) + 
+    geom_point() + 
+    ylab("standardized residuals") + 
+    facet_grid(. ~ transmission) +
+    ggtitle("Standardized residuals by transmission")
+```
+
+Leaving the outliers out made the Q-Q plot's lower tail more reamarkable. Testing normality:
+```{r}
+shapiro.test(rstandard(m1.v1))
+```
+The p-value is higher than 0.05 so these points are coming from a normally distributed dataset. 
+
+
+## Summary
+I selected the model $mpg_i = b_0 + b_1 * transmission_i + b_2 * hp_i + e_i$.  
+
+The final coefficients (leaving the outliers out):
+```{r}
+s <- summary(m1.v1)
+hp.max <- round((s$coeff[1,1] + s$coeff[2,1]) / (-1 * s$coeff[3,1]),1)
+s
+```
+The *(Intercept)* coefficient means the MPG value of a theoretical car with zero HP and automatic transmission.
+
+This anaylsis showed that the cars with manual transmission can run 
+`r round(s$coeff[2,1],4)` $\pm$ `r round(s$coeff[2,2],4)` miles per gallon 
+compared to cars with automatic transmission, if the compared cars have the same HP.
+
+Fun fact: if this model were right for any HP, then a car with manual transmission and 
+`r hp.max` HP could not move... :)
+
+
+## Appendix 1 : the data {#Apx1}
+```{r include=FALSE}
+carData.factor <- select(carData, c(mpg, transmission, engine))
+carData.int <- select(carData, c(mpg, transmission, cyl, gear, carb, wt)) %>%
+    gather(key="data.name", value="data.value", -c(mpg, transmission))
+carData.count <- select(carData, c(mpg, transmission, disp, hp, drat, qsec)) %>%
+    gather(key="data.name", value="data.value", -c(mpg, transmission))
+    
+```
+```{r fig.height=2}
+ggplot(carData.factor, aes(y=mpg)) +
+    geom_point(aes(x=engine, color=transmission))
+```
+```{r fig.height}
+ggplot(carData.int, aes(y=mpg)) +
+    geom_point(aes(x=data.value, color=transmission)) +
+    facet_grid(data.name ~ .)
+ggplot(carData.count, aes(y=mpg)) +
+    geom_point(aes(x=data.value, color=transmission)) +
+    facet_grid(data.name ~ .)
+
+```
+
